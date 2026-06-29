@@ -9,7 +9,7 @@ func join_lines(lines) (s) {
 func page(c) (s) {
     demo_block := "<button onclick='signin()'>Sign in with Google →</button>"
     if c.demo == 1 {
-        demo_block = demo_block + "<button class='ghost' onclick='demo()'>or a fake demo user</button>"
+        demo_block = demo_block + "<button class='ghost' onclick='demo(\"true\")'>fake demo user</button><button class='ghost' onclick='demo(\"false\")'>fake user, no email</button>"
     }
     demo_block = demo_block + "<pre id='out' class='out'></pre>"
     lines := []string{
@@ -48,7 +48,7 @@ demo_block,
 "<script>",
 "function b64urlJson(s){try{return JSON.stringify(JSON.parse(atob(s.replace(/-/g,'+').replace(/_/g,'/'))),null,2)}catch(e){return '(decode error)'}}",
 "function signin(){ location.href='/login?redirect='+encodeURIComponent(location.origin+'/'); }",
-"function demo(){ location.href='/demo?redirect='+encodeURIComponent(location.origin+'/'); }",
+"function demo(t){ location.href='/demo?redirect='+encodeURIComponent(location.origin+'/')+'&track='+t; }",
 "(function(){ var m=location.search.match(/[?&]token=([^&]+)/); if(!m)return; var jwt=decodeURIComponent(m[1]); var p=jwt.split('.'); var out=document.getElementById('out'); if(out){ out.textContent='✓ signed token received\\n\\nheader:  '+b64urlJson(p[0])+'\\n\\npayload: '+b64urlJson(p[1])+'\\n\\nverify it against /.well-known/jwks.json with any JOSE library.'; out.style.display='block'; } history.replaceState(null,'','/'); })();",
 "</script>",
 "</div></body></html>",

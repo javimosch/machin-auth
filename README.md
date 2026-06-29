@@ -52,7 +52,29 @@ Or Docker: `docker build -t machin-auth . && docker run -p 8080:8080 -v $PWD/dat
 | `ALLOWED_ORIGINS` | comma list of app origins allowed to receive tokens (open-redirect guard) |
 | `TOKEN_TTL` | token lifetime in seconds (default 3600) |
 | `PORT` | listen port (default 8080) |
+| `EMAIL_TRACKABLE` | default email policy (`true`). `false` ⇒ tokens omit the real email by default; apps override per `/login` with `?track=true\|false`. |
+| `METRICS=1` | record logins to SQLite (`auth.db`) — **origin + scoped sub + timestamp only, never the real email** — and expose `/stats`. |
+| `STATS_TOKEN` | bearer token required to read `/stats` (e.g. `curl -H "Authorization: Bearer …" .../stats`). |
 | `DEMO=1` | enable `/demo` — issues a token for a fake user (no Google), for testing |
+
+### Email trackability — completing "no cross-app tracking"
+
+The scoped `sub` already makes the same person an *unlinkable* id at every app. But the
+real `email` is a global identifier — so by default two apps could still correlate a
+user by email. Per `/login?...&track=false` (or `EMAIL_TRACKABLE=false`), the token's
+`email` is **omitted** and the claim **`email_trackable: false`** is set — now the user
+is genuinely unlinkable across apps. With `track=true` the real email is included and
+`email_trackable: true`. The app reads the claim to know which it holds.
+
+### Metrics (opt-in)
+
+`METRICS=1` logs each login to SQLite and serves privacy-preserving stats — it stores
+the **scoped sub**, never the real email:
+
+```bash
+curl -H "Authorization: Bearer $STATS_TOKEN" https://auth.you.com/stats
+# { "total_logins": …, "unique_users": …, "by_app": [{origin, logins, users}], "by_day": [...] }
+```
 
 Try the flow with **no Google setup**: run with `DEMO=1 ALLOWED_ORIGINS=http://localhost:8080`, open the page, click *Try the demo sign-in*.
 

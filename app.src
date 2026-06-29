@@ -1,35 +1,40 @@
 // machin-auth — a self-hostable auth broker (a self-hostable Shoo).
 //
-// Google sign-in (OAuth2 + the authorization-code flow) -> a domain-scoped,
-// EdDSA-signed identity token (a standard JWT), verifiable by any app against the
-// published JWKS — no machin SDK required. One binary, your keys, no SaaS, and the
-// same Google user gets a DIFFERENT id per app (no cross-app tracking).
+// Google sign-in -> a domain-scoped, EdDSA-signed identity token (a standard JWT),
+// verifiable by any app against the published JWKS — no machin SDK. The same Google
+// user gets a DIFFERENT id per app (scoped `sub`), and with email_trackable=false the
+// real email is omitted too, so the user is genuinely unlinkable across apps.
 //
 //   machin encode framework/machweb.src framework/sso.src ui.src app.src > app.mfl
-//   machin build app.mfl -o machin-auth
 //
-// Config (env): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_BASE_URL (this broker's
-// public URL), ALLOWED_ORIGINS (comma list of app origins allowed to receive tokens),
-// PORT. DEMO=1 enables /demo (issues a token for a fake user, no Google) for testing.
+// Config (env): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_BASE_URL, ALLOWED_ORIGINS
+// (comma list), PORT. EMAIL_TRACKABLE=false makes "no email by default" the policy
+// (apps override per /login with ?track=true|false). DEMO=1 enables /demo. METRICS=1
+// records logins to SQLite (origin + scoped sub + ts only — never the real email) and
+// exposes a STATS_TOKEN-protected /stats.
 
 type Cfg struct {
-    seed      bytes
-    pub       bytes
-    kid       string
-    iss       string
-    redirect  string
+    seed bytes
+    pub bytes
+    kid string
+    iss string
+    redirect string
     google_id string
     google_sec string
-    allowed   string
+    allowed string
     scope_sec string
-    sess_sec  string
-    ttl       int
-    demo      int
+    sess_sec string
+    ttl int
+    demo int
+    email_default int
+    metrics int
+    stats_token string
+    db int
 }
 
-type Claims struct { iss string  sub string  email string  aud string  iat int  exp int }
+type Claims struct { iss string  sub string  email string  email_trackable bool  aud string  iat int  exp int }
 
-// ---- base64url + EdDSA JWT (verified interoperable with standard JOSE libs) ----
+// ---- base64url + EdDSA JWT (interoperable with standard JOSE libs) ----
 
 func b64url(b) (s) {
     s = base64_encode_bytes(b)
@@ -49,12 +54,19 @@ func jwks(c) (s) {
 }
 
 // issue_token mints the JWT for a verified Google identity, scoped to one app origin.
-// The subject is HMAC(scope_secret, google_sub | origin) so the same person is a
-// different, unlinkable id at every app.
-func issue_token(c, gsub, email, origin) (jwt) {
+// The subject is HMAC(scope_secret, google_sub | origin) — unlinkable across apps. The
+// real email is included only when trackable; either way an email_trackable claim says
+// which. Records a privacy-preserving login row when metrics are on.
+func issue_token(c, gsub, email, origin, trackable) (jwt) {
     scoped := hmac_sha256(c.scope_sec, gsub + "|" + origin)
+    em := ""
+    tr := false
+    if trackable == 1 { em = email  tr = true }
     now := now()
-    jwt = sign_jwt(c, json(Claims{iss: c.iss, sub: scoped, email: email, aud: origin, iat: now, exp: now + c.ttl}))
+    jwt = sign_jwt(c, json(Claims{iss: c.iss, sub: scoped, email: em, email_trackable: tr, aud: origin, iat: now, exp: now + c.ttl}))
+    if c.metrics == 1 {
+        sqlite_exec(c.db, "INSERT INTO logins(origin,sub,trackable,ts) VALUES(?,?,?,?)", []string{origin, scoped, str(trackable), str(now)})
+    }
 }
 
 // ---- helpers ----
@@ -73,7 +85,6 @@ func origin_of(u) (o) {
 func allowed(c, origin) (ok) {
     ok = 0
     if c.allowed == "" {
-        // no allowlist configured -> only localhost (dev)
         if has_prefix(origin, "http://localhost") { ok = 1 }
         if has_prefix(origin, "http://127.0.0.1") { ok = 1 }
         return ok
@@ -81,6 +92,15 @@ func allowed(c, origin) (ok) {
     for _, a := range split(c.allowed, ",") {
         if trim(a) == origin { ok = 1 }
     }
+}
+
+// parse_track resolves the email-trackable choice: ?track=true|false, else the server
+// default (EMAIL_TRACKABLE).
+func parse_track(c, req) (t) {
+    q := query(req, "track")
+    t = c.email_default
+    if q == "false" { t = 0 }
+    if q == "true" { t = 1 }
 }
 
 func with_token(redir, jwt) (url) {
@@ -95,17 +115,21 @@ func json_str(profile, key) (v) {
     if err == "" { v = json_unq(raw) }
 }
 
+func google(c) (p) {
+    p = OAuthProvider{auth_url: "https://accounts.google.com/o/oauth2/v2/auth", token_url: "https://oauth2.googleapis.com/token", userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo", client_id: c.google_id, client_secret: c.google_sec, redirect_uri: c.redirect, scope: "openid email profile"}
+}
+
 // ---- routes ----
 
 func r_login(c, req) (res) {
     redir := query(req, "redirect")
     if redir == "" { res = bad_request("missing ?redirect")  return res }
     if allowed(c, origin_of(redir)) == 0 { res = bad_request("origin not in ALLOWED_ORIGINS")  return res }
-    p := OAuthProvider{auth_url: "https://accounts.google.com/o/oauth2/v2/auth", token_url: "https://oauth2.googleapis.com/token", userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo", client_id: c.google_id, client_secret: c.google_sec, redirect_uri: c.redirect, scope: "openid email profile"}
     state := to_hex(rand_bytes(16))
-    res = redirect(sso_login_url(p, state))
+    res = redirect(sso_login_url(google(c), state))
     res = set_session(res, c.sess_sec, "ostate", state)
     res = set_session(res, c.sess_sec, "oredir", redir)
+    res = set_session(res, c.sess_sec, "otrack", str(parse_track(c, req)))
 }
 
 func r_callback(c, req) (res) {
@@ -114,14 +138,14 @@ func r_callback(c, req) (res) {
     if query(req, "state") != saved { res = bad_request("bad state")  return res }
     redir, rok := get_session(req, c.sess_sec, "oredir")
     if rok == 0 { res = bad_request("missing redirect")  return res }
+    trk, _ := get_session(req, c.sess_sec, "otrack")
     code := query(req, "code")
     if code == "" { res = bad_request("no code (auth denied?)")  return res }
-    p := OAuthProvider{auth_url: "https://accounts.google.com/o/oauth2/v2/auth", token_url: "https://oauth2.googleapis.com/token", userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo", client_id: c.google_id, client_secret: c.google_sec, redirect_uri: c.redirect, scope: "openid email profile"}
-    token, tok := sso_exchange(p, code)
+    token, tok := sso_exchange(google(c), code)
     if tok == 0 { res = bad_request("token exchange failed")  return res }
-    profile, pok := sso_userinfo(p, token)
+    profile, pok := sso_userinfo(google(c), token)
     if pok == 0 { res = bad_request("userinfo failed")  return res }
-    jwt := issue_token(c, json_str(profile, ".sub"), json_str(profile, ".email"), origin_of(redir))
+    jwt := issue_token(c, json_str(profile, ".sub"), json_str(profile, ".email"), origin_of(redir), parse_int(trk))
     res = redirect(with_token(redir, jwt))
 }
 
@@ -130,13 +154,23 @@ func r_demo(c, req) (res) {
     redir := query(req, "redirect")
     if redir == "" { res = bad_request("missing ?redirect")  return res }
     if allowed(c, origin_of(redir)) == 0 { res = bad_request("origin not in ALLOWED_ORIGINS")  return res }
-    jwt := issue_token(c, "demo-google-sub", "demo@example.com", origin_of(redir))
+    jwt := issue_token(c, "demo-google-sub", "demo@example.com", origin_of(redir), parse_track(c, req))
     res = redirect(with_token(redir, jwt))
 }
 
+// r_stats returns privacy-preserving usage counts (Authorization: Bearer STATS_TOKEN).
+func r_stats(c, req) (res) {
+    if c.metrics == 0 { res = not_found()  return res }
+    if c.stats_token == "" { res = not_found()  return res }
+    if header(req, "Authorization") != "Bearer " + c.stats_token { res = response("401 Unauthorized", "text/plain", "unauthorized")  return res }
+    tot, _ := json_get(sqlite_query(c.db, "SELECT COUNT(*) AS n FROM logins"), "[0].n")
+    uniq, _ := json_get(sqlite_query(c.db, "SELECT COUNT(DISTINCT sub) AS n FROM logins"), "[0].n")
+    by_app := sqlite_query(c.db, "SELECT origin, COUNT(*) AS logins, COUNT(DISTINCT sub) AS users FROM logins GROUP BY origin ORDER BY logins DESC")
+    by_day := sqlite_query(c.db, "SELECT date(ts,'unixepoch') AS day, COUNT(*) AS logins FROM logins GROUP BY day ORDER BY day DESC LIMIT 30")
+    res = ok_json("{\"total_logins\":" + tot + ",\"unique_users\":" + uniq + ",\"by_app\":" + by_app + ",\"by_day\":" + by_day + "}")
+}
+
 func handle(c, req) (res) {
-    // req.path carries the query string — match routes on the path part only, so
-    // /?token=... (the success redirect target) still resolves to the landing.
     path := req.path
     qi := index(path, "?")
     if qi >= 0 { path = substr(path, 0, qi) }
@@ -147,11 +181,10 @@ func handle(c, req) (res) {
     if has_prefix(path, "/login") { res = r_login(c, req)  return res }
     if has_prefix(path, "/callback") { res = r_callback(c, req)  return res }
     if has_prefix(path, "/demo") { res = r_demo(c, req)  return res }
+    if has_prefix(path, "/stats") { res = r_stats(c, req)  return res }
     res = not_found()
 }
 
-// load_seed reads a persisted 32-byte Ed25519 seed (hex) or generates + persists one,
-// so issued tokens stay valid across restarts. The file IS the signing key — protect it.
 func load_seed(path) (seed) {
     h := read_file(path)
     if h != "" { seed = from_hex(trim(h))  return seed }
@@ -172,24 +205,28 @@ func main() {
     seed := load_seed("auth-seed.hex")
     ttl := 3600
     if env("TOKEN_TTL") != "" { ttl = parse_int(env("TOKEN_TTL")) }
+    email_default := 1
+    if env("EMAIL_TRACKABLE") == "false" { email_default = 0 }
+    metrics := 0
+    db := 0
+    if env("METRICS") == "1" {
+        metrics = 1
+        db = sqlite_open("auth.db")
+        sqlite_exec(db, "PRAGMA journal_mode=WAL")
+        sqlite_exec(db, "PRAGMA busy_timeout=4000")
+        sqlite_exec(db, "CREATE TABLE IF NOT EXISTS logins(id INTEGER PRIMARY KEY AUTOINCREMENT, origin TEXT, sub TEXT, trackable INTEGER, ts INTEGER)")
+    }
     demo := 0
     if env("DEMO") == "1" { demo = 1 }
     c := Cfg{
-        seed: seed,
-        pub: ed25519_pub(seed),
-        kid: substr(to_hex(sha256_bytes(ed25519_pub(seed))), 0, 16),
-        iss: base,
-        redirect: base + "/callback",
-        google_id: env("GOOGLE_CLIENT_ID"),
-        google_sec: env("GOOGLE_CLIENT_SECRET"),
-        allowed: env("ALLOWED_ORIGINS"),
-        scope_sec: load_secret("auth-scope.hex"),
-        sess_sec: load_secret("auth-sess.hex"),
-        ttl: ttl,
-        demo: demo,
+        seed: seed, pub: ed25519_pub(seed), kid: substr(to_hex(sha256_bytes(ed25519_pub(seed))), 0, 16),
+        iss: base, redirect: base + "/callback",
+        google_id: env("GOOGLE_CLIENT_ID"), google_sec: env("GOOGLE_CLIENT_SECRET"),
+        allowed: env("ALLOWED_ORIGINS"), scope_sec: load_secret("auth-scope.hex"), sess_sec: load_secret("auth-sess.hex"),
+        ttl: ttl, demo: demo, email_default: email_default, metrics: metrics, stats_token: env("STATS_TOKEN"), db: db,
     }
     port := 8080
     if env("PORT") != "" { port = parse_int(env("PORT")) }
-    println("machin-auth on http://localhost:" + str(port) + " (kid " + c.kid + ", demo=" + str(demo) + ")")
+    println("machin-auth on http://localhost:" + str(port) + " (kid " + c.kid + ", demo=" + str(demo) + ", metrics=" + str(metrics) + ")")
     serve(port, func(req) { return handle(c, req) })
 }
