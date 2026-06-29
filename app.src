@@ -135,14 +135,18 @@ func r_demo(c, req) (res) {
 }
 
 func handle(c, req) (res) {
-    p := req.path
-    if p == "/" { res = ok_html(page(c))  return res }
-    if p == "/health" { res = ok_text("ok")  return res }
-    if p == "/.well-known/jwks.json" { res = ok_json(jwks(c))  return res }
-    if p == "/jwks.json" { res = ok_json(jwks(c))  return res }
-    if has_prefix(p, "/login") { res = r_login(c, req)  return res }
-    if has_prefix(p, "/callback") { res = r_callback(c, req)  return res }
-    if has_prefix(p, "/demo") { res = r_demo(c, req)  return res }
+    // req.path carries the query string — match routes on the path part only, so
+    // /?token=... (the success redirect target) still resolves to the landing.
+    path := req.path
+    qi := index(path, "?")
+    if qi >= 0 { path = substr(path, 0, qi) }
+    if path == "/" { res = ok_html(page(c))  return res }
+    if path == "/health" { res = ok_text("ok")  return res }
+    if path == "/.well-known/jwks.json" { res = ok_json(jwks(c))  return res }
+    if path == "/jwks.json" { res = ok_json(jwks(c))  return res }
+    if has_prefix(path, "/login") { res = r_login(c, req)  return res }
+    if has_prefix(path, "/callback") { res = r_callback(c, req)  return res }
+    if has_prefix(path, "/demo") { res = r_demo(c, req)  return res }
     res = not_found()
 }
 
