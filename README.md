@@ -4,6 +4,8 @@ A **self-hostable auth broker** — Google sign-in to a signed identity token, i
 ~76 kB binary. Your keys, no SaaS, no cross-app tracking. A self-hostable take on
 [Shoo](https://shoo.dev) (which is hosted-only).
 
+### ▶ Live demo: **[auth.intrane.fr](https://auth.intrane.fr)** — sign in with Google (or a fake demo user) and watch the signed token come back.
+
 ## What it does
 
 - **Google sign-in** (OAuth2 authorization-code flow) for any of your apps, from one broker.

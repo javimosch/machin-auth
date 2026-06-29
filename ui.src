@@ -7,10 +7,11 @@ func join_lines(lines) (s) {
 }
 
 func page(c) (s) {
-    demo_block := "<p class='muted'>Set <code>DEMO=1</code> to enable a live demo button here.</p>"
+    demo_block := "<button onclick='signin()'>Sign in with Google →</button>"
     if c.demo == 1 {
-        demo_block = "<button id='try' onclick='demo()'>Try the demo sign-in →</button><pre id='out' class='out'></pre>"
+        demo_block = demo_block + "<button class='ghost' onclick='demo()'>or a fake demo user</button>"
     }
+    demo_block = demo_block + "<pre id='out' class='out'></pre>"
     lines := []string{
 "<!doctype html><html lang='en'><head><meta charset='utf-8'>",
 "<meta name='viewport' content='width=device-width,initial-scale=1'>",
@@ -24,7 +25,8 @@ func page(c) (s) {
 "code{background:#161b22;padding:2px 6px;border-radius:4px;color:#7ee787;font-family:ui-monospace,monospace;font-size:14px}",
 "pre{background:#0e1116;border:1px solid #222932;border-radius:8px;padding:14px 16px;overflow:auto;font-size:13px;color:#cdd9e5;font-family:ui-monospace,monospace}",
 "a{color:#7aa2ff;text-decoration:none} .muted{color:#6e7681} ul{color:#adbac7}",
-"button{background:#2ea043;color:#fff;border:0;border-radius:8px;padding:11px 18px;font:inherit;font-weight:700;cursor:pointer}button:hover{background:#3fb950}",
+"button{background:#2ea043;color:#fff;border:0;border-radius:8px;padding:11px 18px;font:inherit;font-weight:700;cursor:pointer;margin-right:8px}button:hover{background:#3fb950}",
+"button.ghost{background:transparent;border:1px solid #30363d;color:#adbac7;font-weight:600}button.ghost:hover{background:#161b22}",
 ".out{margin-top:14px;white-space:pre-wrap;color:#7ee787;min-height:0}",
 "</style></head><body><div class='w'>",
 "<h1>machin·auth</h1>",
@@ -45,6 +47,7 @@ demo_block,
 "<p>Hosted auth brokers see every one of your logins. machin-auth runs on your box, signs with your key, stores nothing, and emits a standard token any stack can verify. <a href='https://github.com/javimosch/machin-auth'>Source</a> · built with <a href='https://github.com/javimosch/machin'>machin</a>.</p>",
 "<script>",
 "function b64urlJson(s){try{return JSON.stringify(JSON.parse(atob(s.replace(/-/g,'+').replace(/_/g,'/'))),null,2)}catch(e){return '(decode error)'}}",
+"function signin(){ location.href='/login?redirect='+encodeURIComponent(location.origin+'/'); }",
 "function demo(){ location.href='/demo?redirect='+encodeURIComponent(location.origin+'/'); }",
 "(function(){ var m=location.search.match(/[?&]token=([^&]+)/); if(!m)return; var jwt=decodeURIComponent(m[1]); var p=jwt.split('.'); var out=document.getElementById('out'); if(out){ out.textContent='✓ signed token received\\n\\nheader:  '+b64urlJson(p[0])+'\\n\\npayload: '+b64urlJson(p[1])+'\\n\\nverify it against /.well-known/jwks.json with any JOSE library.'; } history.replaceState(null,'','/'); })();",
 "</script>",
