@@ -2,7 +2,7 @@
 # slim runtime: the binary links OpenSSL (Ed25519/HMAC + the HTTPS calls to Google)
 # and needs CA certs to verify Google's TLS.
 FROM debian:bookworm-slim AS build
-RUN apt-get update && apt-get install -y --no-install-recommends curl gcc libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl gcc libc6-dev libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://raw.githubusercontent.com/javimosch/machin/main/install.sh | sh && cp /root/.local/bin/machin /usr/local/bin/machin
 COPY . /src
 RUN cd /src && machin encode framework/machweb.src framework/sso.src ui.src app.src > app.mfl && machin build app.mfl -o /usr/local/bin/machin-auth
