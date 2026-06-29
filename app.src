@@ -1,0 +1,191 @@
+// machin-auth — a self-hostable auth broker (a self-hostable Shoo).
+//
+// Google sign-in (OAuth2 + the authorization-code flow) -> a domain-scoped,
+// EdDSA-signed identity token (a standard JWT), verifiable by any app against the
+// published JWKS — no machin SDK required. One binary, your keys, no SaaS, and the
+// same Google user gets a DIFFERENT id per app (no cross-app tracking).
+//
+//   machin encode framework/machweb.src framework/sso.src ui.src app.src > app.mfl
+//   machin build app.mfl -o machin-auth
+//
+// Config (env): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_BASE_URL (this broker's
+// public URL), ALLOWED_ORIGINS (comma list of app origins allowed to receive tokens),
+// PORT. DEMO=1 enables /demo (issues a token for a fake user, no Google) for testing.
+
+type Cfg struct {
+    seed      bytes
+    pub       bytes
+    kid       string
+    iss       string
+    redirect  string
+    google_id string
+    google_sec string
+    allowed   string
+    scope_sec string
+    sess_sec  string
+    ttl       int
+    demo      int
+}
+
+type Claims struct { iss string  sub string  email string  aud string  iat int  exp int }
+
+// ---- base64url + EdDSA JWT (verified interoperable with standard JOSE libs) ----
+
+func b64url(b) (s) {
+    s = base64_encode_bytes(b)
+    s = replace(s, "+", "-")
+    s = replace(s, "/", "_")
+    s = replace(s, "=", "")
+}
+
+func sign_jwt(c, payload) (jwt) {
+    header := "{\"alg\":\"EdDSA\",\"typ\":\"JWT\",\"kid\":\"" + c.kid + "\"}"
+    si := b64url(bytes(header)) + "." + b64url(bytes(payload))
+    jwt = si + "." + b64url(ed25519_sign(c.seed, bytes(si)))
+}
+
+func jwks(c) (s) {
+    s = "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"use\":\"sig\",\"alg\":\"EdDSA\",\"kid\":\"" + c.kid + "\",\"x\":\"" + b64url(c.pub) + "\"}]}"
+}
+
+// issue_token mints the JWT for a verified Google identity, scoped to one app origin.
+// The subject is HMAC(scope_secret, google_sub | origin) so the same person is a
+// different, unlinkable id at every app.
+func issue_token(c, gsub, email, origin) (jwt) {
+    scoped := hmac_sha256(c.scope_sec, gsub + "|" + origin)
+    now := now()
+    jwt = sign_jwt(c, json(Claims{iss: c.iss, sub: scoped, email: email, aud: origin, iat: now, exp: now + c.ttl}))
+}
+
+// ---- helpers ----
+
+func origin_of(u) (o) {
+    o = u
+    i := index(u, "://")
+    if i < 0 { return o }
+    rest := substr(u, i + 3, len(u))
+    host := rest
+    j := index(rest, "/")
+    if j >= 0 { host = substr(rest, 0, j) }
+    o = substr(u, 0, i + 3) + host
+}
+
+func allowed(c, origin) (ok) {
+    ok = 0
+    if c.allowed == "" {
+        // no allowlist configured -> only localhost (dev)
+        if has_prefix(origin, "http://localhost") { ok = 1 }
+        if has_prefix(origin, "http://127.0.0.1") { ok = 1 }
+        return ok
+    }
+    for _, a := range split(c.allowed, ",") {
+        if trim(a) == origin { ok = 1 }
+    }
+}
+
+func with_token(redir, jwt) (url) {
+    sep := "?"
+    if index(redir, "?") >= 0 { sep = "&" }
+    url = redir + sep + "token=" + jwt
+}
+
+func json_str(profile, key) (v) {
+    raw, err := json_get(profile, key)
+    v = ""
+    if err == "" { v = json_unq(raw) }
+}
+
+// ---- routes ----
+
+func r_login(c, req) (res) {
+    redir := query(req, "redirect")
+    if redir == "" { res = bad_request("missing ?redirect")  return res }
+    if allowed(c, origin_of(redir)) == 0 { res = bad_request("origin not in ALLOWED_ORIGINS")  return res }
+    p := OAuthProvider{auth_url: "https://accounts.google.com/o/oauth2/v2/auth", token_url: "https://oauth2.googleapis.com/token", userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo", client_id: c.google_id, client_secret: c.google_sec, redirect_uri: c.redirect, scope: "openid email profile"}
+    state := to_hex(rand_bytes(16))
+    res = redirect(sso_login_url(p, state))
+    res = set_session(res, c.sess_sec, "ostate", state)
+    res = set_session(res, c.sess_sec, "oredir", redir)
+}
+
+func r_callback(c, req) (res) {
+    saved, sok := get_session(req, c.sess_sec, "ostate")
+    if sok == 0 { res = bad_request("missing state")  return res }
+    if query(req, "state") != saved { res = bad_request("bad state")  return res }
+    redir, rok := get_session(req, c.sess_sec, "oredir")
+    if rok == 0 { res = bad_request("missing redirect")  return res }
+    code := query(req, "code")
+    if code == "" { res = bad_request("no code (auth denied?)")  return res }
+    p := OAuthProvider{auth_url: "https://accounts.google.com/o/oauth2/v2/auth", token_url: "https://oauth2.googleapis.com/token", userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo", client_id: c.google_id, client_secret: c.google_sec, redirect_uri: c.redirect, scope: "openid email profile"}
+    token, tok := sso_exchange(p, code)
+    if tok == 0 { res = bad_request("token exchange failed")  return res }
+    profile, pok := sso_userinfo(p, token)
+    if pok == 0 { res = bad_request("userinfo failed")  return res }
+    jwt := issue_token(c, json_str(profile, ".sub"), json_str(profile, ".email"), origin_of(redir))
+    res = redirect(with_token(redir, jwt))
+}
+
+func r_demo(c, req) (res) {
+    if c.demo == 0 { res = not_found()  return res }
+    redir := query(req, "redirect")
+    if redir == "" { res = bad_request("missing ?redirect")  return res }
+    if allowed(c, origin_of(redir)) == 0 { res = bad_request("origin not in ALLOWED_ORIGINS")  return res }
+    jwt := issue_token(c, "demo-google-sub", "demo@example.com", origin_of(redir))
+    res = redirect(with_token(redir, jwt))
+}
+
+func handle(c, req) (res) {
+    p := req.path
+    if p == "/" { res = ok_html(page(c))  return res }
+    if p == "/health" { res = ok_text("ok")  return res }
+    if p == "/.well-known/jwks.json" { res = ok_json(jwks(c))  return res }
+    if p == "/jwks.json" { res = ok_json(jwks(c))  return res }
+    if has_prefix(p, "/login") { res = r_login(c, req)  return res }
+    if has_prefix(p, "/callback") { res = r_callback(c, req)  return res }
+    if has_prefix(p, "/demo") { res = r_demo(c, req)  return res }
+    res = not_found()
+}
+
+// load_seed reads a persisted 32-byte Ed25519 seed (hex) or generates + persists one,
+// so issued tokens stay valid across restarts. The file IS the signing key — protect it.
+func load_seed(path) (seed) {
+    h := read_file(path)
+    if h != "" { seed = from_hex(trim(h))  return seed }
+    seed = rand_bytes(32)
+    write_file(path, to_hex(seed))
+}
+
+func load_secret(path) (s) {
+    s = read_file(path)
+    if s != "" { s = trim(s)  return s }
+    s = to_hex(rand_bytes(32))
+    write_file(path, s)
+}
+
+func main() {
+    base := env("AUTH_BASE_URL")
+    if base == "" { base = "http://localhost:8080" }
+    seed := load_seed("auth-seed.hex")
+    ttl := 3600
+    if env("TOKEN_TTL") != "" { ttl = parse_int(env("TOKEN_TTL")) }
+    demo := 0
+    if env("DEMO") == "1" { demo = 1 }
+    c := Cfg{
+        seed: seed,
+        pub: ed25519_pub(seed),
+        kid: substr(to_hex(sha256_bytes(ed25519_pub(seed))), 0, 16),
+        iss: base,
+        redirect: base + "/callback",
+        google_id: env("GOOGLE_CLIENT_ID"),
+        google_sec: env("GOOGLE_CLIENT_SECRET"),
+        allowed: env("ALLOWED_ORIGINS"),
+        scope_sec: load_secret("auth-scope.hex"),
+        sess_sec: load_secret("auth-sess.hex"),
+        ttl: ttl,
+        demo: demo,
+    }
+    port := 8080
+    if env("PORT") != "" { port = parse_int(env("PORT")) }
+    println("machin-auth on http://localhost:" + str(port) + " (kid " + c.kid + ", demo=" + str(demo) + ")")
+    serve(port, func(req) { return handle(c, req) })
+}

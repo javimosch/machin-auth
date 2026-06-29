@@ -1,0 +1,54 @@
+// The landing/docs page (served at /). Plain HTML, single-quoted so nothing to escape.
+// When DEMO=1, a live button runs the /demo flow and shows the decoded token.
+
+func join_lines(lines) (s) {
+    s = ""
+    for _, ln := range lines { s = s + ln + "\n" }
+}
+
+func page(c) (s) {
+    demo_block := "<p class='muted'>Set <code>DEMO=1</code> to enable a live demo button here.</p>"
+    if c.demo == 1 {
+        demo_block = "<button id='try' onclick='demo()'>Try the demo sign-in →</button><pre id='out' class='out'></pre>"
+    }
+    lines := []string{
+"<!doctype html><html lang='en'><head><meta charset='utf-8'>",
+"<meta name='viewport' content='width=device-width,initial-scale=1'>",
+"<title>machin-auth — a self-hostable auth broker</title>",
+"<meta name='description' content='Self-host Google sign-in: a domain-scoped, EdDSA-signed identity token verifiable by any app, in one tiny binary. No SaaS, no tracking, your keys.'>",
+"<style>",
+"body{margin:0;background:#0a0c10;color:#e6edf3;font:16px/1.6 system-ui,sans-serif}",
+".w{max-width:760px;margin:0 auto;padding:48px 20px}",
+"h1{font-size:40px;margin:0;letter-spacing:-1px} .tag{color:#8b97a4;font-size:19px;margin:12px 0 6px} .tag b{color:#e6edf3}",
+"h2{font-size:20px;margin:34px 0 8px;border-top:1px solid #222932;padding-top:24px}",
+"code{background:#161b22;padding:2px 6px;border-radius:4px;color:#7ee787;font-family:ui-monospace,monospace;font-size:14px}",
+"pre{background:#0e1116;border:1px solid #222932;border-radius:8px;padding:14px 16px;overflow:auto;font-size:13px;color:#cdd9e5;font-family:ui-monospace,monospace}",
+"a{color:#7aa2ff;text-decoration:none} .muted{color:#6e7681} ul{color:#adbac7}",
+"button{background:#2ea043;color:#fff;border:0;border-radius:8px;padding:11px 18px;font:inherit;font-weight:700;cursor:pointer}button:hover{background:#3fb950}",
+".out{margin-top:14px;white-space:pre-wrap;color:#7ee787;min-height:0}",
+"</style></head><body><div class='w'>",
+"<h1>machin·auth</h1>",
+"<p class='tag'>A <b>self-hostable auth broker</b> — Google sign-in to a signed identity token, in one tiny binary.<br>Your keys, no SaaS, no cross-app tracking.</p>",
+"<ul>",
+"<li><b>Google sign-in</b> (OAuth2 authorization-code flow) for any of your apps.</li>",
+"<li>Issues a <b>domain-scoped, EdDSA-signed JWT</b> — the same person gets a <i>different, unlinkable</i> id at every app.</li>",
+"<li>Apps verify it with <b>any standard JOSE library</b> against the published JWKS — no SDK, no callback to this server.</li>",
+"</ul>",
+demo_block,
+"<h2>How an app uses it</h2>",
+"<pre>1. send the user to:  " + c.iss + "/login?redirect=https://yourapp.com/cb\n2. they sign in with Google\n3. we redirect back to:  https://yourapp.com/cb?token=&lt;JWT&gt;\n4. verify the JWT against  " + c.iss + "/.well-known/jwks.json</pre>",
+"<p>The token's <code>sub</code> is HMAC(secret, google_sub | your_origin) — stable for that user at your app, useless anywhere else. <code>aud</code> is your origin; <code>email</code> is included.</p>",
+"<h2>Run it</h2>",
+"<pre>GOOGLE_CLIENT_ID=...  GOOGLE_CLIENT_SECRET=...  \\\n  AUTH_BASE_URL=https://auth.yourdomain.com \\\n  ALLOWED_ORIGINS=https://yourapp.com,https://other.com \\\n  ./machin-auth</pre>",
+"<p class='muted'>One static binary (machin/MFL). The signing key persists to <code>auth-seed.hex</code> on first run — protect it. Verify the public key any time at <a href='/.well-known/jwks.json'>/.well-known/jwks.json</a>.</p>",
+"<h2>Why self-host</h2>",
+"<p>Hosted auth brokers see every one of your logins. machin-auth runs on your box, signs with your key, stores nothing, and emits a standard token any stack can verify. <a href='https://github.com/javimosch/machin-auth'>Source</a> · built with <a href='https://github.com/javimosch/machin'>machin</a>.</p>",
+"<script>",
+"function b64urlJson(s){try{return JSON.stringify(JSON.parse(atob(s.replace(/-/g,'+').replace(/_/g,'/'))),null,2)}catch(e){return '(decode error)'}}",
+"function demo(){ location.href='/demo?redirect='+encodeURIComponent(location.origin+'/'); }",
+"(function(){ var m=location.search.match(/[?&]token=([^&]+)/); if(!m)return; var jwt=decodeURIComponent(m[1]); var p=jwt.split('.'); var out=document.getElementById('out'); if(out){ out.textContent='✓ signed token received\\n\\nheader:  '+b64urlJson(p[0])+'\\n\\npayload: '+b64urlJson(p[1])+'\\n\\nverify it against /.well-known/jwks.json with any JOSE library.'; } history.replaceState(null,'','/'); })();",
+"</script>",
+"</div></body></html>",
+    }
+    s = join_lines(lines)
+}

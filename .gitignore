@@ -1,0 +1,8 @@
+machin-auth
+app.mfl
+*.err
+*.log
+# SECRET keys — never commit
+auth-seed.hex
+auth-scope.hex
+auth-sess.hex
